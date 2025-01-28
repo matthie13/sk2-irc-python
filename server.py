@@ -1,19 +1,29 @@
-import argparse
-from dataclasses import dataclass, field
 from typing import Dict, Set, Optional
+from dataclasses import dataclass, field
 import socket
 import threading
-from typing import Dict, Set
-import datetime
 import ipaddress
-import netifaces ##
+import netifaces
+import argparse
+import datetime
+
 
 @dataclass
 class User:
+    """
+    Klasa reprezentująca użytkownika IRC.
+    
+    Atrybuty:
+        username (str): Nazwa użytkownika
+        nickname (str): Nick używany na serwerze
+        socket (socket.socket): Socket połączenia klienta
+        connected (bool): Status połączenia użytkownika
+    """
+
     username: str
     nickname: str
     socket: socket.socket
-    connected: bool = True  # Add connection state tracking
+    connected: bool = True  
 
     def __hash__(self):
         return hash(self.socket)
@@ -26,6 +36,18 @@ class User:
 
 @dataclass
 class Channel:
+    """
+    Klasa reprezentująca kanał IRC.
+    
+    Atrybuty:
+        name (str): Nazwa kanału
+        topic (str): Temat kanału
+        users (Set[User]): Zbiór użytkowników na kanale
+        modes (str): Tryby kanału
+        server: Referencja do serwera
+        channel_ops (Set[User]): Zbiór operatorów kanału
+    """
+    
     name: str
     topic: str = ""
     users: Set[User] = None
@@ -44,6 +66,7 @@ class Channel:
         Argumenty:
             user (User): Użytkownik do dodania.
         """
+        
         self.users.add(user)
 
     def remove_user(self, user: User) -> None:
@@ -53,6 +76,7 @@ class Channel:
         Argumenty:
             user (User): Użytkownik do usunięcia.
         """
+        
         self.users.discard(user)
         self.channel_ops.discard(user)
 
@@ -66,6 +90,7 @@ class Channel:
         Raises:
             ValueError: Jeśli użytkownik nie jest na kanale.
         """
+        
         if user not in self.users:
             raise ValueError(f"{user.nickname} is not in the channel")
         
@@ -78,6 +103,7 @@ class Channel:
         Argumenty:
             user (User): Użytkownik, który ma być usunięty z listy operatorów.
         """
+        
         self.channel_ops.discard(user)
         
     def is_user_in_channel(self, user: User) -> bool:
@@ -87,6 +113,7 @@ class Channel:
         Argumenty:
             user (User): Użytkownik do sprawdzenia.
         """
+        
         return user in self.users
     
     def is_channel_operator(self, user: User) -> bool:
@@ -99,6 +126,7 @@ class Channel:
         Zwraca:
             bool: True jeśli użytkownik jest operatorm kanału, False jeśli nie
         """
+        
         return user in self.channel_ops
     
     def broadcast(self, message: str, exclude_user: Optional[User] = None) -> None:
@@ -109,6 +137,7 @@ class Channel:
             message (str): Wiadomość do wysłania.
             exclude_user (User, optional): Użytkownik do wykluczenia z odebrania wiadomości. Domyślna wartość to None.
         """
+        
         for user in self.users:
             if user != exclude_user and self.server:
                 self.server.send_message(user.socket, message)
@@ -120,6 +149,7 @@ class Channel:
         Zwraca:
             int: Liczba użytkowników na kanale.
         """
+        
         return len(self.users)
     
     @property
@@ -130,11 +160,25 @@ class Channel:
         Zwraca:
             int: Liczba operatorów kanału.
         """
+        
         return len(self.channel_ops)
 
 
 class Server:
     def __init__(self, ip: str = "0.0.0.0", port: int = 6667) -> None:
+        """
+        Inicjalizacja serwera IRC.
+        Ustawia podstawowe parametry serwera, inicjalizuje struktury danych do przechowywania
+        stanu kanałów, klientów i wątków.
+        
+        Argumenty:
+            ip (str, optional): Adres IP do nasłuchiwania. Domyślnie "0.0.0.0".
+            port (int, optional): Port do nasłuchiwania. Domyślnie 6667.
+            
+        Raises:
+            ValueError: Gdy podano nieprawidłowy adres IP lub port.
+        """
+        
         if ip == "0.0.0.0":
             ip = self.get_network_ip()
             
@@ -192,6 +236,28 @@ class Server:
         }
 
     def start(self) -> None:
+        """
+        Uruchamia instancję serwera IRC i rozpoczyna nasłuchiwanie połączeń.
+        
+        Metoda wykonuje następujące kroki:
+        1. Tworzy nowy socket TCP (SOCK_STREAM)
+        2. Ustawia opcję SO_REUSEADDR dla ponownego użycia adresu
+        3. Przywiązuje socket do zdefiniowanego IP i portu
+        4. Ustawia nasłuchiwanie przychodzących połączeń
+        5. Zapisuje datę utworzenia serwera
+        6. Wchodzi w nieskończoną pętlę obsługi nowych połączeń:
+            1. Akceptuje nowe połączenie
+            2. Tworzy nowy wątek dla każdego klienta
+            3. Przekazuje obsługę klienta do handle_client()
+            4. Wątek jest ustawiany jako daemon (kończy się wraz z głównym wątkiem)
+            
+        Atrybuty instancji używane w metodzie:
+            self.ip (str): Adres IP do nasłuchiwania
+            self.port (int): Port do nasłuchiwania
+            self.client_threads (dict): Słownik przechowujący wątki klientów
+            self.creation_date (datetime): Data utworzenia serwera
+        """
+        
         self.server_fd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_fd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_fd.bind((self.ip, self.port))
@@ -211,8 +277,16 @@ class Server:
             client_td.start()
 
     def get_network_ip(self) -> str:
-        """Get the IP address of the first non-loopback network interface"""
-        # Try getting the default route interface first
+        """
+        Pobiera adres IP pierwszego dostępnego interfejsu sieciowego.
+        Najpierw próbuje pobrać IP interfejsu z domyślną bramą,
+        następnie sprawdza inne interfejsy, pomijając loopback.
+        
+        Zwraca:
+            str: Adres IP interfejsu sieciowego lub '127.0.0.1' jeśli nie znaleziono.
+        """
+        
+        # Najpierw spróbuj pobrać adres IP interfejsu z bramą domyślną
         try:
             default_gateway = netifaces.gateways()['default']
             if default_gateway and netifaces.AF_INET in default_gateway:
@@ -223,31 +297,49 @@ class Server:
         except:
             pass
 
-        # Fallback: check all interfaces
+        # Jeśli się nie udało - sprawdź wszystkie interfejsy
         for interface in netifaces.interfaces():
             addrs = netifaces.ifaddresses(interface)
-            # Skip loopback
+            # Pomiń loopback
             if netifaces.AF_INET in addrs and not addrs[netifaces.AF_INET][0]['addr'].startswith('127.'):
                 return addrs[netifaces.AF_INET][0]['addr']
                 
-        # If no suitable interface found, fallback to localhost
+        # Jeśli nie znaleziono odpowiedniego interfejsu - ustaw adres na loopback
         return '127.0.0.1'
     
     def is_nickname_available(self, nickname: str) -> bool:
+        """
+        Sprawdza, czy podany nickname jest dostępny do użycia.
+        
+        Argumenty:
+            nickname (str): Nick do sprawdzenia.
+        
+        Zwraca:
+            bool: True jeśli nick jest dostępny, False jeśli jest już zajęty.
+        """
+        
         return nickname.lower() not in self.nicknames
 
     def handle_client(self, client_fd: socket.socket) -> None:
-        if client_fd._closed:  # Check if socket is already closed
+        """
+        Obsługa pojedynczego klienta w osobnym wątku.
+        Odbiera i przetwarza komendy od klienta, zarządza jego stanem połączenia.
+        Automatycznie rozłącza klienta w przypadku błędów lub zakończenia połączenia.
+        
+        Argumenty:
+            client_fd (socket.socket): Socket nowego klienta do obsługi.
+        """
+        
+        if client_fd._closed:
             print("DEBUG: Client socket was closed before handling")
             return
 
-        # Create temporary user object
         self.clients[client_fd] = User("*", "*", client_fd)
         user = self.clients[client_fd]
 
         try:
-            while user.connected:  # Use connected flag instead of True
-                if client_fd._closed:  # Double check socket isn't closed
+            while user.connected:
+                if client_fd._closed:
                     print("DEBUG: Socket closed during operation")
                     break
 
@@ -259,12 +351,12 @@ class Server:
 
                     for line in data.split('\n'):
                         if line:
-                            print(f"DEBUG: Received command from {user.nickname}: {line}")  # Debug line
+                            print(f"DEBUG: Received command from {user.nickname}: {line}")
                             try:
                                 self.handle_command(client_fd, line)
                             except Exception as e:
                                 print(f"DEBUG: Error handling command '{line}': {e}")
-                                continue  # Continue processing other commands even if one fails
+                                continue 
 
 
                 except (ConnectionResetError, ConnectionAbortedError, socket.error) as e:
@@ -291,17 +383,17 @@ class Server:
                     print(f"ERROR: Error during final disconnect: {e}")
                     
                 finally:
-                    # Always try to disconnect, even if there were errors
                     self.disconnect_user(client_fd)
 
     def handle_command(self, client_fd: socket.socket, line: str) -> None:
         """
-        Metoda przetwarzająca komendy wydawane przez użytkowników.
+        Metoda przetwarzająca komendy wydawane przez użytkowników IRC.
         
         Argumenty:
-            cliend_fd (socket): Socket klienta.
-            line (str): String wpisany przez użytkownika.
+            client_fd (socket.socket): Socket klienta wysyłającego komendę.
+            line (str): Linia tekstu zawierająca komendę i jej argumenty.
         """
+        
         try:
             if not line:
                 return
@@ -316,36 +408,33 @@ class Server:
             match parts[0].upper():
                 case "PING":
                     self.send_message(client_fd, f"PONG :{parts[1]}" if len(parts) > 1 else "PONG")
-                case "NICK":
-                    self.handle_nick(client_fd, parts[1])
-                case "USER":
-                    self.handle_user(client_fd, parts[1:])
-                case "JOIN":
-                    self.handle_join(client_fd, parts[1])
-                case "PRIVMSG":
-                    self.handle_privmsg(
-                        client_fd, parts[1], ' '.join(parts[2:]))
-                case "PART":
-                    self.handle_part(client_fd, parts[1], ' '.join(
-                        parts[2:]) if len(parts) > 2 else "")
-                case "QUIT":
-                    self.disconnect_user(client_fd)
                 case "CAP":
                     self.handle_cap(client_fd, parts[1:])
                 case "USERHOST":
                     self.handle_userhost(client_fd, parts[1:])
+                case "NICK":
+                    self.handle_nick(client_fd, parts[1])
+                case "USER":
+                    self.handle_user(client_fd, parts[1:])
+                case "PRIVMSG":
+                    message = ' '.join(parts[2:]).lstrip(':')
+                    self.handle_privmsg(
+                        client_fd, parts[1], message)
+                case "JOIN":
+                    self.handle_join(client_fd, parts[1])
+                case "PART":
+                    self.handle_part(client_fd, parts[1], ' '.join(
+                        parts[2:]) if len(parts) > 2 else "")
                 case "LIST":
                     self.handle_list(client_fd)
                 case "NAMES":
                     self.handle_names(client_fd, parts[1] if len(parts) > 1 else None)
-                case "OP":
-                    self.handle_op(client_fd, parts[1], parts[2])
-                case "DEOP":
-                    self.handle_deop(client_fd, parts[1], parts[2])
                 case "MODE":
                     self.handle_mode(client_fd, parts[1:])
                 case "TOPIC":
                     self.handle_topic(client_fd, parts[1], ' '.join(parts[2:]) if len(parts) > 2 else "")
+                case "QUIT":
+                    self.disconnect_user(client_fd)
                 case _:
                     print(f"Unknown command: {parts[0]}")
 
@@ -355,24 +444,36 @@ class Server:
             print(f"Error handling command {line}: {e}")
 
     def handle_cap(self, client_fd: socket.socket, args: list) -> None:
-        """Handle CAP (Client Capability) command"""
+        """
+        Obsługa negocjacji możliwości klienta IRC (Client Capability Negotiation).
+        Obecnie obsługuje tylko podstawowe komendy LS i END.
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta.
+            args (list): Lista argumentów komendy CAP.
+        """
+        
         if not args:
             return
 
         subcmd = args[0].upper()
         match subcmd:
             case "LS":
-                # List supported capabilities (we support none for now)
                 self.send_message(client_fd, "CAP * LS :")
             case "END":
-                # Client is done negotiating capabilities
                 pass
 
     def handle_userhost(self, client_fd: socket.socket, args: list) -> None:
-        """Handle USERHOST command
-        Syntax: USERHOST <nickname> [<nickname> <nickname> ...]
-        Returns information about the specified nicknames
         """
+        Metoda obsługująca komendę USERHOST - zwraca informacje o użytkownikach.
+        Zgodnie ze standardem IRC, obsługuje maksymalnie 5 nicków w jednym zapytaniu.
+        
+        Format: /USERHOST <nickname> [<nickname> <nickname> ...]
+        Argumenty:
+            client_fd (socket.socket): Socket klienta żądającego informacji.
+            args (list): Lista nicków do sprawdzenia.
+        """
+        
         if not args:
             self.send_message(
                 client_fd, 
@@ -384,63 +485,78 @@ class Server:
             return
 
         user = self.clients[client_fd]
-        hostname = "localhost"  # Or get actual hostname
+        hostname = self.ip + ":" + str(self.port)
         
-        # Process each requested nickname
+        # Przetwarzanie każdego nickname
         replies = []
-        for nickname in args[:5]:  # RFC specifies max 5 nicknames per USERHOST command
+        for nickname in args[:5]:  # Maks. 5 nicków na żądanie
             target_user = self.nicknames.get(nickname.lower())
             if target_user:
-                # Format: nickname=+username@host (+ indicates user is not away)
+                # Format: nickname=+username@host
                 replies.append(f"{target_user.nickname}=+{target_user.username}@{hostname}")
         
-        # Send single reply with all found users
         if replies:
             self.send_message(
                 client_fd, 
                 f":{self.name} 302 {user.nickname} :{' '.join(replies)}"
             )
         else:
-            # If no nicknames were found, send empty reply
             self.send_message(
                 client_fd, 
                 f":{self.name} 302 {user.nickname} :"
             )
 
-    def handle_nick(self, client_fd: socket.socket, nickname: str) -> None:       
+    def handle_nick(self, client_fd: socket.socket, nickname: str) -> None:
+        """
+        Metoda obsługująca komendę NICK - zmiana lub ustawienie nicku przez użytkownika.
+        Sprawdza dostępność nicku i powiadamia innych użytkowników o zmianie.
+        
+        Format: /NICK <nickname>
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta zmieniającego nick.
+            nickname (str): Nowy nick użytkownika.
+        """
+               
         user = self.clients[client_fd]
         old_nick = user.nickname
+        
+        nickname = nickname.lstrip(':')
 
-        # Check if nickname is available
         if not self.is_nickname_available(nickname):
             self.send_message(
                 client_fd, self.error_responses.get("ERR_NICKNAMEINUSE").format(nickname=nickname))
             return
 
-        # If this is initial registration (temporary nickname)
+        # Tymczasowy nickname
         if old_nick == "*":
             user.nickname = nickname
-            # Store lowercase for case-insensitive lookup
+            # Przetrzymujemy wersję w lower-case
             self.nicknames[nickname.lower()] = user
             return
 
-        # Update nickname mappings
-        if old_nick.lower() in self.nicknames:  # Check lowercase version
+        if old_nick.lower() in self.nicknames: 
             del self.nicknames[old_nick.lower()]
-        self.nicknames[nickname.lower()] = user  # Store lowercase
-        user.nickname = nickname  # But keep original case for display
+        self.nicknames[nickname.lower()] = user
+        user.nickname = nickname 
 
-        # Broadcast nickname change to all channels user is in
         nick_change_msg = f":{old_nick}!{user.username} NICK :{nickname}"
         for channel in self.channels.values():
             if user in channel.users:
                 channel.broadcast(nick_change_msg)
 
     def handle_user(self, client_fd: socket.socket, args: list) -> None:
-        """Handle USER command
-        Format: USER <username> <hostname> <servername> :<realname>
         """
-        print(f"DEBUG: USER args: {args} (length: {len(args)})")  # Debug the incoming args
+        Metoda obsługujące komendę USER - używana do ustawienia username, nickname, i real name.
+        
+        Format: /USER <username> <hostname> <servername> :<realname>
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta.
+            args (list): Lista argumentów.
+        """
+        
+        print(f"DEBUG: USER args: {args} (length: {len(args)})")
 
         if len(args) < 4:
             self.send_message(
@@ -453,15 +569,15 @@ class Server:
             return
         
         try:
+            # Nie obsługujemy hostname i servername
             username, hostname, servername = args[0:3]
 
-            # Ensure realname is properly formatted and safe to join
+            # Realname musi być poprawnie sformatowane
             realname_parts = args[3:] if len(args) > 3 else []
-            print(f"DEBUG: realname parts before join: {realname_parts}")  # Debugging line
+            print(f"DEBUG: realname parts before join: {realname_parts}")
 
             realname = " ".join(realname_parts).lstrip(':') if realname_parts else ""
             
-            # Get the client object
             user = self.clients.get(client_fd)
             if not user:
                 print("DEBUG: No user found for USER command")
@@ -471,12 +587,9 @@ class Server:
                 )
                 return
 
-            # Set the username
             user.username = username
 
-            # If both nickname and username are set (no longer "*"), complete registration
             if user.nickname != "*" and user.username != "*":
-                # Welcome messages
                 server_name = self.name
                 hostname = self.ip + ":" + str(self.port)
                 server_creation_date = self.creation_date
@@ -493,37 +606,41 @@ class Server:
             print(f"ERROR: Error in handle_user: {e}") 
 
     def handle_join(self, client_fd: socket.socket, channel: str) -> None:
-        # Upewnij się, że nazwa kanału zaczyna się od #
+        """
+        Metoda obsługująca komendę JOIN - użytkownik dołącza do kanału.
+        Jeśli kanał nie istnieje, zostaje utworzony, a użytkownik staje się jego operatorem.
+        
+        Format: /JOIN <channel>
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta dołączającego do kanału.
+            channel (str): Nazwa kanału (z # lub bez).
+        """
+        
         if not channel.startswith('#'):
             channel = '#' + channel
 
         user = self.clients[client_fd]
+        
         is_first_user = False
-        # Utwórz kanał, jeśli taki nie istnieje
         if channel not in self.channels:
             self.create_channel(channel)
-            # Pierwszy użytkownik staję sie automatycznie operatorem
             is_first_user = True
 
         channel_obj = self.channels[channel]
 
-        # Dodaj użytkownika do kanału
         channel_obj.add_user(user)
         if is_first_user:
             channel_obj.add_channel_operator(user)
 
-        # Wyślij potwierdzenie JOIN do użytkownika
         join_message = f":{user.nickname}!{user.username} JOIN {channel}"
         self.send_message(client_fd, join_message)
 
-        # Wyślij powiadomienie o dołączeniu do innych użytkowników
         channel_obj.broadcast(join_message)
 
-        # Wyślij do użytkownika TOPIC kanału
         if channel_obj.topic:
             self.send_message(client_fd, f":server 332 {user.nickname} {channel} :{channel_obj.topic}")
             
-        # Wyślij do użytkownika listę obenych użytkowników kanału
         names_list = []
         for u in channel_obj.users:
             # Operatorzy dostają prefix @
@@ -535,7 +652,17 @@ class Server:
         self.send_message(client_fd, f":server 366 {user.nickname} {channel} :End of /NAMES list")
 
     def handle_part(self, client_fd: socket.socket, channel: str, reason: str = "") -> None:
-        """Handle PART command to leave a channel"""
+        """
+        Metoda obsługująca komendę PART - opuszcza kanał przez użytkownika.
+        
+        Format: /PART <channel> [<reason>]
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta opuszczającego kanał.
+            channel (str): Nazwa kanału do opuszczenia.
+            reason (str, optional): Opcjonalny powód opuszczenia kanału.
+        """
+        
         if not channel.startswith('#'):
             channel = '#' + channel
 
@@ -580,12 +707,23 @@ class Server:
             del self.channels[channel]
 
     def handle_privmsg(self, client_fd: socket.socket, target: str, message: str) -> None:
+        """
+        Metoda obsługująca komendę PRIVMSG - wysyła prywatną wiadomość do podanego użytkownika lub kanału.
+        
+        Format: /PRIVMSG <target> <message>
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta wysyłającego wiadomość.
+            target (str): Nazwa kanału lub nick odbiorcy wiadomości.
+            message (str): Treść wiadomości.
+        """
+        
         sender = self.clients[client_fd]
 
-        # Format the message according to IRC protocol
+        # Formatowanie wiadomości zgodnie ze standardem IRC
         formatted_msg = f":{sender.nickname}!{sender.username} PRIVMSG {target} :{message}"
 
-        # If target is a channel
+        # Jeśli celem jest kanał
         if target.startswith('#'):
             if target not in self.channels:
                 self.send_message(
@@ -608,14 +746,12 @@ class Server:
                 )
                 return
 
-            # Broadcast to all users in channel except sender
-            for user in channel.users:
-                if user != sender:
-                    self.send_message(user.socket, formatted_msg)
+            # Wyślij wiadomość do wszystkich użytkowników kanału (oprócz nadawcy)
+            channel.broadcast(formatted_msg, exclude_user=sender)
 
-        # If target is a user (private message)
+        # Jeśli celem jest inny użytkownik (prywatna wiadomość)
         else:
-            if not self.is_nickname_available(target):  # if nickname exists
+            if not self.is_nickname_available(target):
                 target_user = self.nicknames[target.lower()]
                 self.send_message(target_user.socket, formatted_msg)
             else:
@@ -628,13 +764,16 @@ class Server:
                 )
 
     def handle_list(self, client_fd: socket.socket) -> None:
-        """Handle LIST command
-        
-        Sends information about all visible channels to the user
-        
-        Args:
-            client_fd: The socket connection to the client
         """
+        Metoda obsługująca komendę LIST - wysyła listę dostępnych kanałów.
+        Dla każdego kanału zwraca jego nazwę, liczbę użytkowników i temat.
+        
+        Format: /LIST
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta żądającego listy kanałów.
+        """
+        
         user = self.clients[client_fd]
     
         # RPL_LISTSTART (321)
@@ -658,13 +797,16 @@ class Server:
     
     def handle_names(self, client_fd: socket.socket, channel_name: Optional[str] = None) -> None:
         """
-        Metoda obsługująca polecenie /NAMES.
-        Wysyła do użytkownika listę użytkowników na wszystkich kanałach, lub na określonym kanale.
+        Metoda obsługująca komendę NAMES - wysyła do użytkownika listę użytkowników.
+        Zwraca listę użytkowników na wszystkich kanałach, lub na określonym kanale.
+        
+        Format: /NAMES [<channel>]
         
         Argumenty:
             client_fd (socket): Socket użytkownika.
             channel_name (str, optional): Nazwa kanału, którego listę użytkowników chcemy. Domyślnie None.
         """
+        
         user = self.clients[client_fd]
         if channel_name is not None:
             if not channel_name.startswith('#'):
@@ -690,128 +832,20 @@ class Server:
                 names_list = [f"{'@' if channel.is_channel_operator(u) else ''}{u.nickname}" for u in channel.users]
                 self.send_message(client_fd, f":{self.name} 353 {user.nickname} = {chan_name} :{' '.join(names_list)}")
             self.send_message(client_fd, f":{self.name} 366 {user.nickname} * :End of /NAMES list")
-    
-    def handle_op(self, client_fd: socket.socket, channel_name: str, target_nick: str) -> None:
-        """
-        Metoda obsługująca polecenie /OP. Nadaje uprawnienia operatora wybranemu użytkownikowi na podanym kanale.
-        """
-        user = self.clients[client_fd]
-        
-        if not channel_name.startswith('#'):
-            channel_name = '#' + channel_name
-            
-        if channel_name not in self.channels:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_NOSUCHCHANNEL"].format(
-                    nickname=user.nickname,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        channel = self.channels[channel_name]
-        
-        # Sprawdź, czy użytkownik jest operatorem (może nadawać innym uprawnienia operatora)
-        if not channel.is_channel_operator(user):
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_CHANOPRIVSNEEDED"].format(
-                    nickname=user.nickname,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        # Znajdź użytkownika docelowego
-        target_user = self.nicknames.get(target_nick.lower())
-        if not target_user:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_NOSUCHNICK"].format(
-                    nickname=user.nickname,
-                    target=target_nick
-                )
-            )
-            return
-            
-        if target_user not in channel.users:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_USERNOTINCHANNEL"].format(
-                    nickname=user.nickname,
-                    target=target_nick,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        # Dodaj status operatora
-        channel.add_channel_operator(target_user)
-        channel.broadcast(f":{user.nickname}!{user.username} MODE {channel_name} +o {target_user.nickname}")
-    
-    def handle_deop(self, client_fd: socket.socket, channel_name: str, target_nick: str) -> None:
-        """
-        Metoda obsługująca polecenie /DEOP. Zabiera uprawnienia operatora wybranemu użytkownikowi na podanym kanale.
-        """
-        # Kod podobny jak w handle_op, tylko tym razem używamy remove_channel_operator
-        user = self.clients[client_fd]
-        
-        if not channel_name.startswith('#'):
-            channel_name = '#' + channel_name
-            
-        if channel_name not in self.channels:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_NOSUCHCHANNEL"].format(
-                    nickname=user.nickname,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        channel = self.channels[channel_name]
-        
-        if not channel.is_channel_operator(user):
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_CHANOPRIVSNEEDED"].format(
-                    nickname=user.nickname,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        target_user = self.nicknames.get(target_nick.lower())
-        if not target_user:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_NOSUCHNICK"].format(
-                    nickname=user.nickname,
-                    target=target_nick
-                )
-            )
-            return
-            
-        if target_user not in channel.users:
-            self.send_message(
-                client_fd,
-                self.error_responses["ERR_USERNOTINCHANNEL"].format(
-                    nickname=user.nickname,
-                    target=target_nick,
-                    channel=channel_name
-                )
-            )
-            return
-            
-        channel.remove_channel_operator(target_user)
-        channel.broadcast(f":{user.nickname}!{user.username} MODE {channel_name} -o {target_user.nickname}")  
-    
+
     def handle_topic(self, client_fd: socket.socket, channel_name: str, new_topic: str = "") -> None:
-        """Handle TOPIC command
-        If new_topic is empty, show current topic
-        If new_topic is not empty, set new topic (requires channel operator status)
         """
+        Metoda obsługująca komendę TOPIC - zwraca lub ustawia temat kanału.
+        
+        Format: /TOPIC <channel> [<topic>]
+        
+        Argumenty:
+            channel_name (str): Nazwa kanału docelowego.
+            new_topic (str): Nowy temat kanału docelowego. 
+            Jeśli new_topic jest pusty, wysyła obecny temat.
+            Jeśli new_topic nie jest pusty, ustawia nowy temat (wymaga statusu operatora kanału).
+        """
+        
         user = self.clients[client_fd]
         
         if not channel_name.startswith('#'):
@@ -866,14 +900,31 @@ class Server:
     
     def handle_mode(self, client_fd: socket.socket, args: list) -> None:
         """
-        Handle MODE command
-        Format: MODE <channel> <mode> [<args>]
-        Currently supported modes:
-        +o/-o - Give/take channel operator status
+        Metoda obsługująca polecenie MODE
+        
+        Format: \n
+        /MODE <channel>  - sprawdzenie trybów kanału\n
+        /MODE <channel> <mode> [<args>] - ustawienie trybu
+        
+        Obecnie wspierane tryby:
+            +o - Nadanie statusu operatora kanału\n
+            -o - Odebranie statusu operatora kanału
+            
+        Przykłady użycia:
+            MODE #channel +o nickname  - nadaje status operatora
+            MODE #channel -o nickname  - odbiera status operatora
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta wysyłającego komendę
+            args (list): Lista argumentów komendy MODE:
+                - args[0]: Nazwa kanału
+                - args[1]: Tryb (+o/-o)
+                - args[2]: Nick użytkownika (jeśli wymagany)
         """
+        
         user = self.clients[client_fd]
         
-        if len(args) < 2:
+        if len(args) < 1:
             self.send_message(
                 client_fd,
                 self.error_responses["ERR_NEEDMOREPARAMS"].format(
@@ -887,7 +938,6 @@ class Server:
         if not channel_name.startswith('#'):
             channel_name = '#' + channel_name
         
-        # Check if channel exists
         if channel_name not in self.channels:
             self.send_message(
                 client_fd,
@@ -899,9 +949,12 @@ class Server:
             return
 
         channel = self.channels[channel_name]
+        if len(args) == 1:
+            # Format: :<server> 324 <nick> <channel> <modes>
+            self.send_message(client_fd, f":{self.name} 324 {user.nickname} {channel_name} +nt")
+            return
+    
         mode = args[1]
-
-        # Currently only handling operator status changes
         if mode in ['+o', '-o']:
             if len(args) < 3:
                 self.send_message(
@@ -913,7 +966,6 @@ class Server:
                 )
                 return
 
-            # Check if user is operator
             if not channel.is_channel_operator(user):
                 self.send_message(
                     client_fd,
@@ -952,33 +1004,56 @@ class Server:
                 channel.add_channel_operator(target_user)
             else:  # -o
                 channel.remove_channel_operator(target_user)
-
-            # Notify channel of mode change
+                
             channel.broadcast(f":{user.nickname}!{user.username} MODE {channel_name} {mode} {target_user.nickname}")
    
     def create_channel(self, name: str, topic: str = "") -> Channel:
+        """
+        Tworzy nowy kanał na serwerze.
+        
+        Argumenty:
+            name (str): Nazwa kanału.
+            topic (str, optional): Opcjonalny temat kanału.
+        
+        Zwraca:
+            Channel: Utworzony obiekt kanału.
+            
+        Raises:
+            ValueError: Jeśli kanał o podanej nazwie już istnieje.
+        """
+
         if name in self.channels:
             raise ValueError(f"Channel {name} already exists")
         channel = Channel(name=name, topic=topic)
-        channel.server = self  # Set the server reference
+        channel.server = self
         self.channels[name] = channel
         return channel
 
     def send_message(self, client_fd: socket.socket, message: str) -> None:
+        """
+        Wysyła wiadomość do klienta z odpowiednim formatowaniem IRC.
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta - odbiorca wiadomości.
+            message (str): Wiadomość do wysłania.
+        """
+        
         try:
             full_message = f"{message}\r\n"
             print(f"DEBUG: Sending raw bytes: {full_message.encode('utf-8')}")
             client_fd.send(full_message.encode('utf-8'))
         except Exception as e:
-            print(f"Error sending message: {e}")
+            print(f"ERROR: Error sending message: {e}")
 
     def disconnect_user(self, client_fd: socket.socket) -> None:
         """
-        Disconnect a user and clean up their presence in channels and server lists.
-
-        Args:
-            client_fd: The socket connection to the client
+        Rozłącza użytkownika i czyści jego obecność na serwerze.
+        Usuwa użytkownika z kanałów, list nicków i zamyka połączenie.
+        
+        Argumenty:
+            client_fd (socket.socket): Socket klienta do rozłączenia.
         """
+        
         try:
             if client_fd not in self.clients:
                 print("DEBUG: Client not found in clients dictionary")
@@ -1036,6 +1111,13 @@ class Server:
 
 
 def main() -> None:
+    """
+    Główna funkcja uruchamiająca serwer IRC.
+    Przetwarza argumenty wiersza poleceń (IP i port),
+    inicjalizuje i uruchamia serwer.
+    Obsługuje przerwania i błędy krytyczne.
+    """
+    
     parser = argparse.ArgumentParser(description='Python IRC Server')
     parser.add_argument('--ip', type=str, default="0.0.0.0", 
                       help='IP address to bind to (default: 0.0.0.0)')
