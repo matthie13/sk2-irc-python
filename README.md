@@ -58,3 +58,25 @@ Funkcje serwera:
 - Automatyczne czyszczenie pustych kanałów
 - Wsparcie dla Client Capability Negotiation (CAP)
 - Formatowanie wiadomości zgodne ze standardem IRC
+
+Funkcje klient:
+1. Logowanie
+- Użytkownik jest najpierw proszony o podanie Nick, Name, Ip i port serwera
+
+2. Interface
+- Klient posiada prosty interface graficzny, po dołączeniu na serwer okno formularza logowania zamyka się i pojawia okno z obsługą serwera
+- Dla uproszczenia zostały doddany przyciski do dołączenia na kanał, opuszczenia kanału oraz wysłanie wiadomości (można też enterem)
+
+3. Obsługiwane Komendy:
+- ./help (pokazuje wszystkie dostępne komendy)
+- JOIN (w okno czatu należy wpisać nazwe kanału np.: #test i nacisną przycisk JOIN)
+- PART (przycisk aktywuje się przy dołączeniu na kanał)
+- LIST (./list pokazuje dostępne kanały na serwerze, liczbe użytkowników na tych kanałach oraz ustawiony temat)
+- NAMES (./names pokazuje liste dostępnych użytkowników na kanale na którym dołączyłeś)
+- PRIVMSG (./priv nick wiadomość, wiadomości prywatne)
+
+4. Komunikaty
+- Klient odbiera komunikaty od serwera i je formatuje do czytelnej formy (+usuwa nadmierne komunikaty).
+- Obsługiwane są komunikaty o dołączeniu na kanał
+- Opuszczenie go (czy to przez PART czy Disconnect)
+- Wysyłanie wiadomości na kanał bądź prywatnie
