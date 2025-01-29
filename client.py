@@ -110,7 +110,7 @@ class IRCClientGUI:
             self.send_message_raw(f"JOIN {channel}")
             self.channels[channel] = []
             self.current_channel = channel
-            self.log_message(f"Joined channel {channel}")
+            self.log_message(f"Joined channel [{channel}]")
             # Aktywacja przycisku Leave Channel
             self.message_entry.delete(0, tk.END)
             self.leave_button.config(state='normal')
@@ -142,9 +142,9 @@ class IRCClientGUI:
             # Wyślij komendę NAMES dla aktualnego kanału
                 if self.current_channel:
                     self.send_message_raw(f"NAMES {self.current_channel}")
-                    self.log_message(f"Requested user list for channel {self.current_channel}")
+                    #self.log_message(f"Requested user list for channel {self.current_channel}")
                 else:
-                    self.log_message("Error: You must join a channel first to list users.")
+                    self.log_message("[Error]: You must join a channel first to list users.")
             elif message.startswith("./help"):
                 # Wyświetlenie dostępnych komend
                 self.show_help()
@@ -158,13 +158,13 @@ class IRCClientGUI:
                         self.send_message_raw(f"PRIVMSG {target_nick} :{private_message}")
                         self.log_message(f"Private message to {target_nick}: {private_message}")
                     else:
-                        self.log_message("Error: Message content cannot be empty.")
+                        self.log_message("[Error]: Message content cannot be empty.")
                 else:
-                    self.log_message("Error: No message provided after ./priv <nick> <message>.")
+                    self.log_message("[Error]: No message provided after ./priv <nick> <message>.")
             elif self.current_channel:
                 # Wiadomość na kanał
                 self.send_message_raw(f"PRIVMSG {self.current_channel} :{message}")
-                self.log_message(f"Message to {self.current_channel}: {message}")
+                self.log_message(f"Message to [{self.current_channel}]: {message}")
             else:
                 # Wiadomość prywatna, jeśli nie ma kanału
                 self.send_message_raw(f"PRIVMSG {self.nickname} :{message}")
@@ -172,7 +172,6 @@ class IRCClientGUI:
 
             # Wyczyść pole wiadomości
             self.message_entry.delete(0, tk.END)
-
 
     def send_message_raw(self, message):
         """Wysyłanie wiadomości bezpośrednio do serwera."""
@@ -190,14 +189,16 @@ class IRCClientGUI:
         )
         self.log_message(help_text, is_system=True)
 
-
     def receive_messages(self):
         """Odbieranie wiadomości z serwera IRC."""
         while self.running:
             try:
-                response = self.server_socket.recv(1024).decode('utf-8')
+                response = self.server_socket.recv(2048).decode('utf-8')
                 if not response:
                     break
+
+                # Logowanie otrzymanych danych
+                #self.log_message(f"Received raw data: {response}", is_system=True)
 
                 for line in response.split("\r\n"):
                     if line:
@@ -210,52 +211,63 @@ class IRCClientGUI:
         """Obsługuje komunikaty serwera."""
         if message.startswith("PING"):
             # Odpowiadamy na PING
-            server = message.split(":")[1].strip()
-            self.send_message_raw(f"PONG :{server}")
+            server = message.split(":")[1].strip() if len(message.split(":")) > 1 else ""
+            if server:
+                self.send_message_raw(f"PONG :{server}")
 
         elif "PRIVMSG" in message:
-                # Obsługuje wiadomości prywatne
-                parts = message.split(" :", 1)  # Dzielimy wiadomość na części
-                if len(parts) > 1:
-                    sender = message.split('!')[0][1:]  # Wyciągamy nadawcę
-                    message_content = parts[1]  # Treść wiadomości
-                    # Sprawdzanie, czy wiadomość jest prywatna czy z kanału
-                    if message.split(' ')[2].startswith('#'):
-                        channel_name = message.split(' ')[2]
-                        self.log_message(f"{channel_name} {sender}: {message_content}")  # Wiadomość na kanał
-                    else:
-                        self.log_message(f"[PRIV] {sender}: {message_content}")  # Wiadomość prywatna
+            # Obsługuje wiadomości prywatne lub z kanałów
+            parts = message.split(" :", 1)
+            if len(parts) > 1:
+                sender = message.split('!')[0][1:]  # Wyciągamy nadawcę
+                message_content = parts[1]  # Treść wiadomości
+                channel = message.split(' ')[2] if len(message.split(' ')) > 2 else ""
+
+                if channel.startswith('#'):
+                    # Wiadomość na kanał
+                    self.log_message(f"[{channel}] {sender}: {message_content}")
+                else:
+                    # Wiadomość prywatna
+                    self.log_message(f"[PRIV] {sender}: {message_content}")
 
         elif "JOIN" in message:
             # Obsługuje dołączenie do kanału
             parts = message.split(" ")
-            user_info = parts[0]  # np. "BBB!B@127.0.0.1"
-            user_name = user_info.split('!')[0][1:]  # Wyciągamy nazwę użytkownika (np. "BBB")
-            channel = parts[2].split(":")[1]  # Kanał, do którego dołączono (np. #test)
-            
-            if user_name == self.nickname:
-                # Jeśli to Ty dołączasz do kanału
-                if channel not in self.channels:
-                    self.channels[channel] = []
-                    self.current_channel = channel
-                self.log_message(f"You joined channel {channel}")
-            else:
-                # Jeśli inny użytkownik dołącza do kanału
-                self.log_message(f"{user_name} joined channel {channel}")
+            if len(parts) >= 3:
+                user_info = parts[0]
+                user_name = user_info.split('!')[0][1:]  # Wydobycie samego nicku
+                channel = parts[2]  # Kanał, do którego dołączono (np. #test)
 
-        elif "PART" in message and f":{self.nickname}!" in message:
+                if user_name == self.nickname:
+                    # Jeśli to Ty dołączasz do kanału
+                    if channel not in self.channels:
+                        self.channels[channel] = []
+                        self.current_channel = channel
+                else:
+                    # Jeśli inny użytkownik dołącza do kanału
+                    self.log_message(f"{user_name} joined channel [{channel}]")
+
+        elif "PART" in message:
             # Obsługuje opuszczenie kanału
-            channel = message.split("PART :")[1]
-            if channel in self.channels:
-                del self.channels[channel]
-            if self.current_channel == channel:
-                self.current_channel = None
-            self.log_message(f"Opuszczono kanał {channel}")
+            parts = message.split(" ")
+            if len(parts) >= 3:
+                user_info = parts[0]
+                user_name = user_info.split('!')[0][1:]  # Wydobycie samego nicku
+                channel = parts[2]  # Kanał, który użytkownik opuszcza (np. #test)
+
+                if user_name == self.nickname:
+                    # Jeśli to Ty opuszczasz kanał
+                    if channel in self.channels:
+                        del self.channels[channel]
+                    self.current_channel = None
+                else:
+                    # Jeśli inny użytkownik opuszcza kanał
+                    self.log_message(f"{user_name} left channel [{channel}]")
 
         elif "001" in message:
             # Powitanie serwera (001)
             welcome_message = message.split(":", 2)[2]
-            self.log_message(f"[SERVER] {welcome_message}", is_system=True)
+            self.log_message(f"Welcome to the server, {self.nickname}!", is_system=True)
 
         elif "002" in message:
             # Informacje o hoście (002)
@@ -279,16 +291,16 @@ class IRCClientGUI:
         elif "376" in message:
             # Koniec MOTD (376)
             self.log_message(f"[MOTD] End of Message of the Day.", is_system=True)
-        
+
         elif "322" in message:
-            # Informacja o kanale (kod 322)
-            parts = message.split(" ", 4)
+            # Odpowiedź z informacjami o kanale (numer 322)
+            parts = message.split(" ", 5)
             if len(parts) >= 5:
                 channel_name = parts[3]
                 user_count = parts[4].split(":")[0]  # Liczba użytkowników
                 topic = parts[4].split(":")[1] if ":" in parts[4] else "(No topic)"
-                self.log_message(f"[CHANNEL] {channel_name} ({user_count} users) - {topic}")
-        
+                self.log_message(f"[Channel]: {channel_name}, Users: {user_count}, Topic: {topic}")
+
         elif "353" in message:
             # Odpowiedź na komendę NAMES
             parts = message.split(" ", 5)
@@ -298,21 +310,47 @@ class IRCClientGUI:
                 self.log_message(f"[USERS] {channel_name}: " + ", ".join(users))
 
         elif "323" in message:
-            # Koniec listy kanałów (kod 323)
-            self.log_message("End of channel list.")
+            # Obsługuje odpowiedź o braku kanałów (323)
+            if "No channels" in message:
+                self.log_message("[INFO] No channels found.", is_system=True)
+            else:
+                self.log_message(f"End of channel list.", is_system=True)
+
+
+        elif "QUIT" in message:
+            self.handle_quit(message)
+
+    # Usuń komunikaty systemowe (nadmiarowe)
+        elif any(code in message for code in ["366", "004", "003", "321"]):
+            return
 
         else:
-            # Obsługa pozostałych wiadomości serwerowych
+            # Obsługuje pozostałe komunikaty serwera
             self.log_message(f"[SERVER RAW] {message}", is_system=True)
 
-    def log_message(self, message, is_system=False):
+    def handle_quit(self, message):
+        parts = message.split(" :")
+        
+        if len(parts) >= 2:
+            quit_message = parts[1]  # Powód zakończenia połączenia
+            user_info = parts[0].split('!')[0][1:]  # Wydobycie nicku
+            self.log_message(f"{user_info} has quit the server. Reason: {quit_message}")
+        else:
+            self.log_message(f"A user has quit the server.")
+    
+    def log_message(self, message, is_system=False, is_channel_message=False):
         """Logowanie wiadomości w oknie chat log."""
         self.chat_log.config(state='normal')
         timestamp = datetime.now().strftime("[%H:%M:%S]")
+        
+        # Filtruj komunikaty systemowe, jeśli 'is_system' jest ustawione na False
         if is_system:
-            self.chat_log.insert(tk.END, f"{timestamp} [SYSTEM] {message}\n")  # Dodanie tagu [SYSTEM]
+            self.chat_log.insert(tk.END, f"{timestamp} [SYSTEM] {message}\n")
+        elif is_channel_message:
+            self.chat_log.insert(tk.END, f"{timestamp} {message}\n")
         else:
             self.chat_log.insert(tk.END, f"{timestamp} {message}\n")
+
         self.chat_log.config(state='disabled')
         self.chat_log.see(tk.END)
 
